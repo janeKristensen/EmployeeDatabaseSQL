@@ -13,8 +13,7 @@ GO
 IF OBJECT_ID('Departments', 'U') IS NULL CREATE TABLE Departments 
 (
 	department_id int IDENTITY(1,1),
-	department_name varchar(50) NOT NULL,
-	manager_id int,
+	department_name varchar(50) NOT NULL UNIQUE,
 	PRIMARY KEY(department_id),
 );
 GO
@@ -29,8 +28,37 @@ IF OBJECT_ID('Employees', 'U') IS NULL CREATE TABLE Employees
 	address varchar(100),
 	employment_date DATE NOT NULL,
 	phone_no varchar(8),
-	department_id int NOT NULL,
 	PRIMARY KEY(employee_id),
+);
+GO
+
+
+IF OBJECT_ID('DepartmentEmployees', 'U') IS NULL CREATE TABLE DepartmentEmployees 
+(
+	department_id int,
+	employee_id int,
+	PRIMARY KEY(department_id, employee_id),
+
+	FOREIGN KEY(employee_id) 
+	REFERENCES Employees(employee_id),
+
+	FOREIGN KEY(department_id) 
+	REFERENCES Departments(department_id),
+);
+GO
+
+
+IF OBJECT_ID('Managers', 'U') IS NULL CREATE TABLE Managers
+(
+	department_id int NOT NULL,
+	employee_id int NOT NULL,
+	PRIMARY KEY(department_id, employee_id),
+
+	FOREIGN KEY(employee_id) 
+	REFERENCES Employees(employee_id),
+
+	FOREIGN KEY(department_id) 
+	REFERENCES Departments(department_id),
 );
 GO
 
@@ -38,9 +66,10 @@ GO
 IF OBJECT_ID('AbsenceTypes', 'U') IS NULL CREATE TABLE AbsenceTypes
 (
 	absence_type_id int IDENTITY(1,1),
-	absence_type varchar(50) NOT NULL,
+	absence_type varchar(50) NOT NULL UNIQUE,
 	planned bit NOT NULL,
 	PRIMARY KEY(absence_type_id),
+
 );
 GO
 
@@ -49,22 +78,15 @@ IF OBJECT_ID('AbsencePeriods', 'U') IS NULL CREATE TABLE AbsencePeriods
 (
 	start_date DATE NOT NULL,
 	end_date DATE,
-	days_absent AS DATEDIFF(dd, start_date, end_date),
+	days_absent AS DATEDIFF(dd, start_date, DATEADD(dd, 1, end_date)),
 	employee_id int NOT NULL,
-	department_id int NOT NULL,
 	absence_type_id int NOT NULL,
 	request_id int,
 	PRIMARY KEY(start_date, employee_id),
 
-	CONSTRAINT FK1_AbsencePeriods
 	FOREIGN KEY(employee_id) 
 	REFERENCES Employees(employee_id),
 
-	CONSTRAINT FK2_AbsencePeriods
-	FOREIGN KEY(department_id) 
-	REFERENCES Departments(department_id),
-
-	CONSTRAINT FK3_AbsencePeriods
 	FOREIGN KEY(absence_type_id) 
 	REFERENCES AbsenceTypes(absence_type_id),
 );
@@ -77,20 +99,13 @@ IF OBJECT_ID('PTORequests', 'U') IS NULL CREATE TABLE PTORequests
 	start_date DATE NOT NULL,
 	end_date DATE NOT NULL,
 	employee_id int NOT NULL,
-	department_id int NOT NULL,
 	absence_type_id int NOT NULL,
 	approval_status bit NOT NULL DEFAULT 0,
 	PRIMARY KEY(request_id),
 
-	CONSTRAINT FK1_PTORequest
 	FOREIGN KEY(employee_id) 
 	REFERENCES Employees(employee_id),
 
-	CONSTRAINT FK2_PTORequest
-	FOREIGN KEY(department_id) 
-	REFERENCES Departments(department_id),
-
-	CONSTRAINT FK3_PTORequest
 	FOREIGN KEY(absence_type_id) 
 	REFERENCES AbsenceTypes(absence_type_id),
 );
@@ -98,16 +113,6 @@ GO
 
 
 /* Adding foreing keys for tables*/
-ALTER TABLE Departments
-ADD CONSTRAINT FK1_Departments
-FOREIGN KEY(manager_id) 
-REFERENCES Employees(employee_id);
-
-ALTER TABLE Employees
-ADD CONSTRAINT FK1_Employees
-FOREIGN KEY(department_id) 
-REFERENCES Departments(department_id);
-
 ALTER TABLE AbsencePeriods
 ADD CONSTRAINT FK4_AbsencePeriods
 FOREIGN KEY(request_id) 
@@ -127,15 +132,11 @@ CREATE PROCEDURE spNewEmployee
 @Lastname varchar(50),
 @Address varchar(100),
 @EmploymentDate DATE,
-@PhoneNumber varchar(8),
-@DepartmentName varchar(50))
+@PhoneNumber varchar(8))
 AS
 BEGIN
-	INSERT INTO Employees (fname, lname, address, employment_date, phone_no, department_id)
-	VALUES(@Firstname, @Lastname, @Address, @EmploymentDate, @PhoneNumber, 
-	(SELECT department_id 
-	FROM Departments 
-	WHERE department_name = @DepartmentName) )
+	INSERT INTO Employees (fname, lname, address, employment_date, phone_no)
+	VALUES(@Firstname, @Lastname, @Address, @EmploymentDate, @PhoneNumber)
 END
 GO
 
@@ -145,12 +146,11 @@ CREATE PROCEDURE spRegisterNewAbsence
 (@StartDate DATE, 
 @EndDate DATE, 
 @EmployeeID int, 
-@DepartmentID int, 
 @AbsenceTypeID int)
 AS
 BEGIN
-	INSERT INTO AbsencePeriods (start_date, end_date, employee_id, department_id, absence_type_id)
-	VALUES (@StartDate, @EndDate, @EmployeeID, @DepartmentID, @AbsenceTypeID);
+	INSERT INTO AbsencePeriods (start_date, end_date, employee_id, absence_type_id)
+	VALUES (@StartDate, @EndDate, @EmployeeID, @AbsenceTypeID);
 END
 GO
 
@@ -160,53 +160,56 @@ CREATE PROCEDURE spRegisterNewPTORequest
 (@StartDate DATE, 
 @EndDate DATE, 
 @EmployeeID int, 
-@DepartmentID int, 
 @AbsenceTypeID int)
 AS
 BEGIN
-	INSERT INTO PTORequests(start_date, end_date, employee_id, department_id, absence_type_id)
-	VALUES (@StartDate, @EndDate, @EmployeeID, @DepartmentID, @AbsenceTypeID);
+	INSERT INTO PTORequests(start_date, end_date, employee_id, absence_type_id)
+	VALUES (@StartDate, @EndDate, @EmployeeID, @AbsenceTypeID);
 END
 GO
 
 
 /* List of employees in department */
 CREATE PROCEDURE spGetAllEmployees
+(@DepartmentID int)
 AS
 BEGIN
 	SELECT 
-		name AS 'Employee Name', 
-		address AS 'Home Address', 
-		employment_date AS 'Employment date',
-		department_name AS 'Department'
+		emp.name AS 'Employee Name', 
+		emp.address AS 'Home Address', 
+		emp.employment_date AS 'Employment date',
+		department_name AS 'Department',
+		(SELECT name FROM Employees WHERE employee_id = man.employee_id AND de.department_id = man.department_id) AS 'Manager'
 	FROM Employees emp 
-	INNER JOIN Departments dep 
-	ON emp.department_id = dep.department_id; 
+	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
+	INNER JOIN Departments dep ON de.department_id = dep.department_id
+	INNER JOIN Managers man ON man.department_id = dep.department_id
+	WHERE dep.department_id = @DepartmentID; 
 END
 GO
 
 
 /* Generate a list of all employees currently not absent */
-CREATE PROCEDURE spGetPresentEmployeesByDepartment
+CREATE PROCEDURE spGetAbsentEmployeesByDepartment
 (@DepartmentID int)
 AS
 BEGIN
 	SELECT 
 		name AS 'Employee',
 		department_name AS 'Department',
-		dep.department_id,
-		employee_id
-	FROM Departments dep
-	INNER JOIN Employees emp
-	ON dep.department_id = emp.department_id  
-	WHERE employee_id NOT IN 
+		(SELECT name FROM Employees WHERE employee_id = man.employee_id) AS 'Manager'
+	FROM Employees emp
+	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id 
+	INNER JOIN Departments dep ON dep.department_id = de.department_id
+	INNER JOIN Managers man ON man.department_id = dep.department_id
+	WHERE emp.employee_id IN 
 		(SELECT 
 			DISTINCT(ab.employee_id)
 		FROM AbsencePeriods ab 
 		Left JOIN Employees emp 
 		ON emp.employee_id = ab.employee_id 
 		WHERE ab.end_date IS NULL)
-	AND dep.department_id = @DepartmentID;
+	AND de.department_id = @DepartmentID;
 END
 GO
 
@@ -218,6 +221,7 @@ AS
 BEGIN
 	SELECT 
 		name AS 'Employee', 
+		dep.department_name AS 'Department',
 		start_date AS 'Date',
 		days_absent AS 'Days absent', 
 		(SELECT absence_type 
@@ -225,8 +229,9 @@ BEGIN
 		WHERE absence_type_id = ab.absence_type_id) 
 		AS 'Absence Reason' 
 	FROM Employees emp
-	INNER JOIN AbsencePeriods ab
-	ON emp.employee_id = ab.employee_id
+	INNER JOIN AbsencePeriods ab ON emp.employee_id = ab.employee_id
+	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
+	INNER JOIN Departments dep ON de.department_id = dep.department_id
 	WHERE emp.employee_id = @EmployeeID
 	ORDER BY start_date;
 END
@@ -241,11 +246,10 @@ BEGIN
 		DISTINCT(name) AS 'Employee', 
 		department_name AS 'Department', 
 		count(*) OVER(PARTITION BY emp.employee_id) AS 'Number of Absences' 
-	FROM Departments dep
-	INNER JOIN Employees emp
-	ON dep.department_id = emp.department_id
-	INNER JOIN AbsencePeriods ab 
-	ON emp.employee_id = ab.employee_id;
+	FROM Employees emp
+	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
+	INNER JOIN Departments dep ON de.department_id = dep.department_id
+	INNER JOIN AbsencePeriods ab ON emp.employee_id = ab.employee_id;
 END
 GO
 
@@ -257,7 +261,7 @@ AS
 BEGIN
 	SELECT 
 		name AS 'Employee', 
-		department_id AS 'Department',
+		department_name AS 'Department',
 		absences AS 'Number of unplanned absence periods', 
 		total_days AS 'Total days unplanned absence' 
 	FROM 
@@ -271,8 +275,10 @@ BEGIN
 		WHERE end_date > DATEADD(year, -1, GETDATE())
 		AND planned = 0) A
 	LEFT JOIN Employees emp ON A.employee_id = emp.employee_id
+	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
+	INNER JOIN Departments dep ON de.department_id = dep.department_id
 	WHERE absences >= 3 
-	AND department_id = @DepartmentID;
+	AND dep.department_id = @DepartmentID;
 END
 GO
 
@@ -288,11 +294,13 @@ BEGIN
 		end_date AS 'To',
 		absence_type AS 'Reason',
 		approval_status AS 'Approval Status',
-		(SELECT name FROM Employees WHERE employee_id IN (SELECT manager_id FROM Departments WHERE department_id = pto.department_id)) AS 'Approver'
+		(SELECT name FROM Employees WHERE employee_id = man.employee_id) AS 'Approver'
 	FROM PTORequests pto
-	INNER JOIN Employees emp ON pto.employee_id = emp.employee_id
-	INNER JOIN Departments dep ON emp.department_id = dep.department_id
+	LEFT JOIN Employees emp ON pto.employee_id = emp.employee_id
+	LEFT JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
+	LEFT JOIN Departments dep ON de.department_id = dep.department_id
 	INNER JOIN AbsenceTypes ab ON pto.absence_type_id = ab.absence_type_id
+	LEFT JOIN Managers man ON man.department_id = dep.department_id
 	WHERE approval_status = 0;
 END
 GO
@@ -326,7 +334,6 @@ AS
 		inserted.start_date,
 		inserted.end_date,
 		inserted.employee_id,
-		inserted.department_id,
 		inserted.absence_type_id,
 		inserted.request_id
 	FROM inserted
@@ -347,25 +354,46 @@ INSERT INTO Departments (department_name)
 VALUES ('Accounting');
 GO
 
+INSERT INTO Departments (department_name)
+VALUES ('Management');
+GO
+
 /* Add employees to table*/
-spNewEmployee 'Jeppe', 'Nielsen', 'Ovrevej 75, 4000 Roskilde', '2019-03-01', '31369952', 'Accounting';
+spNewEmployee 'Jeppe', 'Nielsen', 'Ovrevej 75, 4000 Roskilde', '2019-03-01', '31369952';
 GO
-spNewEmployee 'Lars', 'Larsen', 'Ringvejen 5, 2730 Herlev', '1995-04-01', '21365577', 'Finance';
+spNewEmployee 'Lars', 'Larsen', 'Ringvejen 5, 2730 Herlev', '1995-04-01', '21365577';
 GO
-spNewEmployee 'Peter', 'Petersen', 'Vimmelskaftet 101, 4000 Roskilde', '2015-10-01', '42697813', 'Finance';
+spNewEmployee 'Peter', 'Petersen', 'Vimmelskaftet 101, 4000 Roskilde', '2015-10-01', '42697813';
 GO
-spNewEmployee 'Lene', 'Jensen', 'Nedrevej 23, 4000 Roskilde', '2002-01-01', '75253695', 'Accounting';
+spNewEmployee 'Lene', 'Jensen', 'Nedrevej 23, 4000 Roskilde', '2002-01-01', '75253695';
 GO
+spNewEmployee 'Carl', 'Carlsen', 'Vejnavn 10, 4066 By', '2024-01-01', '45368546';
 
-/* Define managers for departments*/
-UPDATE Departments
-SET manager_id = (SELECT employee_id FROM Employees WHERE name = 'Peter Petersen')
-WHERE department_name = 'Finance';
 
-UPDATE Departments
-SET manager_id = (SELECT employee_id FROM Employees WHERE name = 'Lene Jensen')
-WHERE department_name = 'Accounting';
-GO
+/* Add employees to department roster */
+INSERT INTO DepartmentEmployees (department_id, employee_id)
+VALUES(1,2);
+
+INSERT INTO DepartmentEmployees (department_id, employee_id)
+VALUES(1,5);
+
+INSERT INTO DepartmentEmployees (department_id, employee_id)
+VALUES(2,3);
+
+INSERT INTO DepartmentEmployees (department_id, employee_id)
+VALUES(3,1);
+
+INSERT INTO DepartmentEmployees (department_id, employee_id)
+VALUES(3,4);
+
+
+/* Add Managers */
+INSERT INTO Managers (department_id, employee_id)
+VALUES (1,1);
+
+INSERT INTO Managers (department_id, employee_id)
+VALUES (2,4);
+
 
 /* Add possible types of absences to table*/
 INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('PTO', 1);
@@ -376,25 +404,30 @@ INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Unplanned time off', 0
 GO
 
 /* Add absence periods to table*/
-spRegisterNewAbsence '2024-01-07', '2024-01-08', 3, 1, 3;
+spRegisterNewAbsence '2024-01-07', '2024-01-08', 3, 1;
 GO
-spRegisterNewAbsence '2022-01-12', '2022-01-15', 1, 2, 3;
+spRegisterNewAbsence '2022-01-12', '2022-01-15', 1, 3;
 GO
-spRegisterNewAbsence '2024-10-01', '2024-10-21', 3, 1, 2;
+spRegisterNewAbsence '2024-05-01', '2024-05-21', 3, 1;
 GO
-spRegisterNewAbsence '2024-02-01', '2024-02-03', 3, 1, 3;
+spRegisterNewAbsence '2023-10-01', '2023-10-03', 3, 3;
 GO
-spRegisterNewAbsence '2023-03-01', '2023-03-03', 3, 1, 3;
+spRegisterNewAbsence '2023-07-27', '2023-07-28', 3, 3;
 GO
-spRegisterNewAbsence '2024-05-15', '2024-05-25', 4, 2, 1;
+spRegisterNewAbsence '2024-02-01', '2024-02-03', 3, 3;
 GO
-spRegisterNewAbsence '2024-06-10', NULL, 4, 2, 3;
+spRegisterNewAbsence '2023-03-01', '2023-03-03', 3, 3;
+GO
+spRegisterNewAbsence '2024-05-15', '2024-05-25', 4, 1;
+GO
+spRegisterNewAbsence '2024-06-10', NULL, 5, 3;
 GO
 
 /* Add a PTO request */
-spRegisterNewPTORequest '2024-05-11', '2024-06-01', 2, 2, 1;
+spRegisterNewPTORequest '2024-05-11', '2024-06-01', 2, 1;
 GO
-
+spRegisterNewPTORequest '2024-08-01', '2024-08-21', 4, 2;
+GO
 
 
 /********************************************************
@@ -402,12 +435,12 @@ GO
 
 **********************************************************/
 
-/* List of all employees*/
-spGetAllEmployees
+/* List of all employees in department 1*/
+spGetAllEmployees 1
 GO
 
 /* Employees present in department 1 */
-spGetPresentEmployeesByDepartment 1
+spGetAbsentEmployeesByDepartment 1
 GO
 
 /* All absence periods for employee 3 */
@@ -419,16 +452,17 @@ spNumberAbsencesForAllEMployees
 GO
 
 /* Employees with more than 2 absence periods within the past year in department 1*/
-spMoreThanTwoAbsencesForDepartment 1
-GO
-
-/* View all unapproved PTO requests */
-spUnapprovedPTORequests
+spMoreThanTwoAbsencesForDepartment 2
 GO
 
 /* Approve PTO request */
 spApprovePTORequest 1
 GO
+
+/* View all unapproved PTO requests */
+spGetUnapprovedPTORequests
+GO
+
 
 
 
@@ -438,7 +472,9 @@ GO
 **********************************************************/
 /*View of all tables */
 SELECT * FROM Employees;
-SELECT * FROM AbsencePeriods;
+SELECT * FROM Managers;
 SELECT * FROM Departments;
+SELECT * FROM DepartmentEmployees;
+SELECT * FROM AbsencePeriods;
 SELECT * FROM AbsenceTypes;
 GO
