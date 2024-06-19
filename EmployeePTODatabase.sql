@@ -120,6 +120,56 @@ REFERENCES PTORequests(request_id);
 GO
 
 
+/********************************************************
+	Create views to return virtual tables
+
+**********************************************************/
+
+/* Create a view with data on employees to use in later queries */
+CREATE VIEW AllEmployees AS
+SELECT 
+	emp.employee_id AS 'Employee ID',
+	emp.name AS 'Employee Name', 
+	emp.address AS 'Home Address', 
+	emp.employment_date AS 'Employment date',
+	dep.department_id AS 'Department ID',
+	department_name AS 'Department',
+	(SELECT name FROM Employees WHERE employee_id = man.employee_id AND de.department_id = man.department_id) AS 'Manager'
+FROM Employees emp 
+LEFT JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
+LEFT JOIN Departments dep ON de.department_id = dep.department_id
+LEFT JOIN Managers man ON man.department_id = dep.department_id;
+GO
+
+
+/* Generate list of all employees with number of absences*/
+CREATE VIEW NumberAbsencesForAllEMployees AS
+SELECT 
+	DISTINCT([Employee Name]), 
+	[Department],
+	count(*) OVER(PARTITION BY [Employee ID]) AS 'Number of Absences' 
+FROM AllEmployees
+LEFT JOIN AbsencePeriods ab ON [Employee ID] = ab.employee_id;
+GO
+
+
+/* View all unapproved PTO requests */
+CREATE VIEW GetUnapprovedPTORequests AS	
+SELECT 
+	[Employee Name] AS 'Requester',
+	[Department],
+	start_date AS 'From',
+	end_date AS 'To',
+	absence_type AS 'Reason',
+	approval_status AS 'Approval Status',
+	(SELECT name FROM Employees WHERE employee_id = [Manager]) AS 'Approver'
+FROM PTORequests pto
+INNER JOIN AbsenceTypes ab ON pto.absence_type_id = ab.absence_type_id
+LEFT JOIN AllEmployees ON [Employee ID] = employee_id
+WHERE approval_status = 0;
+
+GO
+
 
 /********************************************************
 	Create procedures for adding data and getting reports
@@ -175,16 +225,14 @@ CREATE PROCEDURE spGetAllEmployees
 AS
 BEGIN
 	SELECT 
-		emp.name AS 'Employee Name', 
-		emp.address AS 'Home Address', 
-		emp.employment_date AS 'Employment date',
-		department_name AS 'Department',
-		(SELECT name FROM Employees WHERE employee_id = man.employee_id AND de.department_id = man.department_id) AS 'Manager'
-	FROM Employees emp 
-	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
-	INNER JOIN Departments dep ON de.department_id = dep.department_id
-	INNER JOIN Managers man ON man.department_id = dep.department_id
-	WHERE dep.department_id = @DepartmentID; 
+		[Employee ID],
+		[Employee Name], 
+		[Home Address], 
+		[Employment date],
+		[Department],
+		[Manager]
+	FROM AllEmployees 
+	WHERE [Department ID] = @DepartmentID; 
 END
 GO
 
@@ -195,21 +243,20 @@ CREATE PROCEDURE spGetAbsentEmployeesByDepartment
 AS
 BEGIN
 	SELECT 
-		name AS 'Employee',
-		department_name AS 'Department',
-		(SELECT name FROM Employees WHERE employee_id = man.employee_id) AS 'Manager'
-	FROM Employees emp
-	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id 
-	INNER JOIN Departments dep ON dep.department_id = de.department_id
-	INNER JOIN Managers man ON man.department_id = dep.department_id
-	WHERE emp.employee_id IN 
+		[Employee Name], 
+		[Home Address], 
+		[Employment date],
+		[Department],
+		[Manager]
+	FROM AllEmployees 
+	WHERE [Employee ID] IN 
 		(SELECT 
 			DISTINCT(ab.employee_id)
 		FROM AbsencePeriods ab 
 		Left JOIN Employees emp 
 		ON emp.employee_id = ab.employee_id 
 		WHERE ab.end_date IS NULL)
-	AND de.department_id = @DepartmentID;
+	AND [Department ID] = @DepartmentID;
 END
 GO
 
@@ -220,36 +267,18 @@ CREATE PROCEDURE spGetEmployeeAbsences
 AS
 BEGIN
 	SELECT 
-		name AS 'Employee', 
-		dep.department_name AS 'Department',
+		[Employee Name], 
+		[Department],
 		start_date AS 'Date',
 		days_absent AS 'Days absent', 
 		(SELECT absence_type 
 		FROM AbsenceTypes 
 		WHERE absence_type_id = ab.absence_type_id) 
 		AS 'Absence Reason' 
-	FROM Employees emp
-	INNER JOIN AbsencePeriods ab ON emp.employee_id = ab.employee_id
-	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
-	INNER JOIN Departments dep ON de.department_id = dep.department_id
-	WHERE emp.employee_id = @EmployeeID
+	FROM AllEmployees
+	INNER JOIN AbsencePeriods ab ON [Employee ID] = ab.employee_id
+	WHERE [Employee ID] = @EmployeeID
 	ORDER BY start_date;
-END
-GO
-
-
-/* Generate list of all employees with number of absences*/
-CREATE PROCEDURE spNumberAbsencesForAllEMployees
-AS
-BEGIN
-	SELECT 
-		DISTINCT(name) AS 'Employee', 
-		department_name AS 'Department', 
-		count(*) OVER(PARTITION BY emp.employee_id) AS 'Number of Absences' 
-	FROM Employees emp
-	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
-	INNER JOIN Departments dep ON de.department_id = dep.department_id
-	INNER JOIN AbsencePeriods ab ON emp.employee_id = ab.employee_id;
 END
 GO
 
@@ -260,8 +289,8 @@ CREATE PROCEDURE spMoreThanTwoAbsencesForDepartment
 AS
 BEGIN
 	SELECT 
-		name AS 'Employee', 
-		department_name AS 'Department',
+		[Employee Name], 
+		[Department],
 		absences AS 'Number of unplanned absence periods', 
 		total_days AS 'Total days unplanned absence' 
 	FROM 
@@ -274,34 +303,9 @@ BEGIN
 		ON ap.absence_type_id = ad.absence_type_id 
 		WHERE end_date > DATEADD(year, -1, GETDATE())
 		AND planned = 0) A
-	LEFT JOIN Employees emp ON A.employee_id = emp.employee_id
-	INNER JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
-	INNER JOIN Departments dep ON de.department_id = dep.department_id
+	LEFT JOIN AllEmployees ON [Employee ID] = employee_id
 	WHERE absences >= 3 
-	AND dep.department_id = @DepartmentID;
-END
-GO
-
-
-/* View all unapproved PTO requests */
-CREATE PROCEDURE spGetUnapprovedPTORequests
-AS
-BEGIN	
-	SELECT 
-		name AS 'Requester',
-		department_name AS 'Department',
-		start_date AS 'From',
-		end_date AS 'To',
-		absence_type AS 'Reason',
-		approval_status AS 'Approval Status',
-		(SELECT name FROM Employees WHERE employee_id = man.employee_id) AS 'Approver'
-	FROM PTORequests pto
-	LEFT JOIN Employees emp ON pto.employee_id = emp.employee_id
-	LEFT JOIN DepartmentEmployees de ON emp.employee_id = de.employee_id
-	LEFT JOIN Departments dep ON de.department_id = dep.department_id
-	INNER JOIN AbsenceTypes ab ON pto.absence_type_id = ab.absence_type_id
-	LEFT JOIN Managers man ON man.department_id = dep.department_id
-	WHERE approval_status = 0;
+	AND [Department] = @DepartmentID;
 END
 GO
 
@@ -431,7 +435,7 @@ GO
 
 
 /********************************************************
-	Using procedures to get data
+	Using views and procedures to get data
 
 **********************************************************/
 
@@ -443,12 +447,12 @@ GO
 spGetAbsentEmployeesByDepartment 1
 GO
 
-/* All absence periods for employee 3 */
-spGetEmployeeAbsences 3
+/* Number of absence periods for all employees */
+SELECT * FROM NumberAbsencesForAllEMployees
 GO
 
-/* Number of absence periods for all employees */
-spNumberAbsencesForAllEMployees
+/* All absence periods for employee 3 */
+spGetEmployeeAbsences 3
 GO
 
 /* Employees with more than 2 absence periods within the past year in department 1*/
@@ -460,7 +464,7 @@ spApprovePTORequest 1
 GO
 
 /* View all unapproved PTO requests */
-spGetUnapprovedPTORequests
+SELECT * FROM GetUnapprovedPTORequests
 GO
 
 
@@ -471,6 +475,7 @@ GO
 
 **********************************************************/
 /*View of all tables */
+SELECT * FROM AllEmployees;
 SELECT * FROM Employees;
 SELECT * FROM Managers;
 SELECT * FROM Departments;
