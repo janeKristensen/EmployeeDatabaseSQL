@@ -112,7 +112,7 @@ IF OBJECT_ID('PTORequests', 'U') IS NULL CREATE TABLE PTORequests
 GO
 
 
-/* Adding foreing keys for tables*/
+/* Adding foreing key for table*/
 ALTER TABLE AbsencePeriods
 ADD CONSTRAINT FK4_AbsencePeriods
 FOREIGN KEY(request_id) 
@@ -143,13 +143,12 @@ GO
 
 
 /* Generate list of all employees with number of absences*/
-CREATE VIEW NumberAbsencesForAllEMployees AS
+CREATE VIEW NumberAbsencesForAllEmployees AS
 SELECT 
 	DISTINCT([Employee Name]), 
 	[Department],
 	count(*) OVER(PARTITION BY [Employee ID]) AS 'Number of Absences' 
-FROM AllEmployees
-LEFT JOIN AbsencePeriods ab ON [Employee ID] = ab.employee_id;
+FROM AllEmployees LEFT JOIN AbsencePeriods ab ON [Employee ID] = ab.employee_id;
 GO
 
 
@@ -186,7 +185,7 @@ CREATE PROCEDURE spNewEmployee
 AS
 BEGIN
 	INSERT INTO Employees (fname, lname, address, employment_date, phone_no)
-	VALUES(@Firstname, @Lastname, @Address, @EmploymentDate, @PhoneNumber)
+	VALUES(@Firstname, @Lastname, @Address, @EmploymentDate, @PhoneNumber);
 END
 GO
 
@@ -250,12 +249,9 @@ BEGIN
 		[Manager]
 	FROM AllEmployees 
 	WHERE [Employee ID] IN 
-		(SELECT 
-			DISTINCT(ab.employee_id)
-		FROM AbsencePeriods ab 
-		Left JOIN Employees emp 
-		ON emp.employee_id = ab.employee_id 
-		WHERE ab.end_date IS NULL)
+		(SELECT DISTINCT(ab.employee_id)
+		FROM AbsencePeriods ab Left JOIN Employees emp ON emp.employee_id = ab.employee_id 
+		WHERE ab.end_date IS NULL) 
 	AND [Department ID] = @DepartmentID;
 END
 GO
@@ -271,12 +267,8 @@ BEGIN
 		[Department],
 		start_date AS 'Date',
 		days_absent AS 'Days absent', 
-		(SELECT absence_type 
-		FROM AbsenceTypes 
-		WHERE absence_type_id = ab.absence_type_id) 
-		AS 'Absence Reason' 
-	FROM AllEmployees
-	INNER JOIN AbsencePeriods ab ON [Employee ID] = ab.employee_id
+		(SELECT absence_type FROM AbsenceTypes WHERE absence_type_id = ab.absence_type_id) AS 'Absence Reason' 
+	FROM AllEmployees INNER JOIN AbsencePeriods ab ON [Employee ID] = ab.employee_id
 	WHERE [Employee ID] = @EmployeeID
 	ORDER BY start_date;
 END
@@ -298,14 +290,10 @@ BEGIN
 			DISTINCT(employee_id),
 			count(*) OVER(PARTITION BY employee_id) AS absences,
 			SUM(days_absent) OVER(PARTITION BY employee_id) AS total_days
-		FROM AbsencePeriods ap 
-		INNER JOIN AbsenceTypes ad 
-		ON ap.absence_type_id = ad.absence_type_id 
-		WHERE end_date > DATEADD(year, -1, GETDATE())
-		AND planned = 0) A
-	LEFT JOIN AllEmployees ON [Employee ID] = employee_id
-	WHERE absences >= 3 
-	AND [Department] = @DepartmentID;
+		FROM AbsencePeriods ap INNER JOIN AbsenceTypes ad ON ap.absence_type_id = ad.absence_type_id 
+		WHERE end_date > DATEADD(year, -1, GETDATE()) AND planned = 0) A 
+		LEFT JOIN AllEmployees ON [Employee ID] = employee_id
+	WHERE absences >= 3 AND [Department ID] = @DepartmentID;
 END
 GO
 
@@ -328,19 +316,20 @@ GO
 
 **********************************************************/
 
-/* Triggers on update of PTO request to insert new absence period */
+/* Triggers on approval of PTO request to insert new absence period */
 CREATE TRIGGER AfterUPDATETrigger
 ON PTORequests
 AFTER UPDATE
 AS
-	INSERT INTO AbsencePeriods
-	SELECT TOP 1
-		inserted.start_date,
-		inserted.end_date,
-		inserted.employee_id,
-		inserted.absence_type_id,
-		inserted.request_id
-	FROM inserted
+	IF (SELECT TOP 1 inserted.approval_status FROM inserted) = 1
+		INSERT INTO AbsencePeriods
+		SELECT TOP 1
+			inserted.start_date,
+			inserted.end_date,
+			inserted.employee_id,
+			inserted.absence_type_id,
+			inserted.request_id
+		FROM inserted;
 GO
 	
 
@@ -350,88 +339,62 @@ GO
 
 **********************************************************/
 
-/* Add departments to table*/
-INSERT INTO Departments (department_name)
-VALUES ('Finance');
+BEGIN TRANSACTION transAddData
 
-INSERT INTO Departments (department_name)
-VALUES ('Accounting');
-GO
+	BEGIN TRY
+		/* Add employees to table*/
+		EXEC spNewEmployee 'Jeppe', 'Nielsen', 'Ovrevej 75, 4000 Roskilde', '2019-03-01', '31369952';
+		EXEC spNewEmployee 'Lars', 'Larsen', 'Ringvejen 5, 2730 Herlev', '1995-04-01', '21365577';
+		EXEC spNewEmployee 'Peter', 'Petersen', 'Vimmelskaftet 101, 4000 Roskilde', '2015-10-01', '42697813';
+		EXEC spNewEmployee 'Lene', 'Jensen', 'Nedrevej 23, 4000 Roskilde', '2002-01-01', '75253695';
+		EXEC spNewEmployee 'Carl', 'Carlsen', 'Vejnavn 10, 4066 By', '2024-01-01', '45368546';
 
-INSERT INTO Departments (department_name)
-VALUES ('Management');
-GO
+		/* Add departments to table*/
+		INSERT INTO Departments (department_name) VALUES ('Finance');
+		INSERT INTO Departments (department_name) VALUES ('Accounting');
+		INSERT INTO Departments (department_name) VALUES ('Management');
+		
+		/* Add employees to department roster */
+		INSERT INTO DepartmentEmployees (department_id, employee_id) VALUES(1,2);
+		INSERT INTO DepartmentEmployees (department_id, employee_id) VALUES(1,5);
+		INSERT INTO DepartmentEmployees (department_id, employee_id) VALUES(2,3);
+		INSERT INTO DepartmentEmployees (department_id, employee_id) VALUES(3,1);
+		INSERT INTO DepartmentEmployees (department_id, employee_id) VALUES(3,4);
 
-/* Add employees to table*/
-spNewEmployee 'Jeppe', 'Nielsen', 'Ovrevej 75, 4000 Roskilde', '2019-03-01', '31369952';
-GO
-spNewEmployee 'Lars', 'Larsen', 'Ringvejen 5, 2730 Herlev', '1995-04-01', '21365577';
-GO
-spNewEmployee 'Peter', 'Petersen', 'Vimmelskaftet 101, 4000 Roskilde', '2015-10-01', '42697813';
-GO
-spNewEmployee 'Lene', 'Jensen', 'Nedrevej 23, 4000 Roskilde', '2002-01-01', '75253695';
-GO
-spNewEmployee 'Carl', 'Carlsen', 'Vejnavn 10, 4066 By', '2024-01-01', '45368546';
+		/* Add Managers */
+		INSERT INTO Managers (department_id, employee_id) VALUES (1,1);
+		INSERT INTO Managers (department_id, employee_id) VALUES (2,4);
 
+		/* Add possible types of absences to table*/
+		INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('PTO', 1);
+		INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Scheduled annual leave', 1);
+		INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Illness', 0);
+		INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Unpaid leave', 1);
+		INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Unplanned time off', 0);
 
-/* Add employees to department roster */
-INSERT INTO DepartmentEmployees (department_id, employee_id)
-VALUES(1,2);
+		/* Add absence periods to table*/
+		EXEC spRegisterNewAbsence '2024-01-07', '2024-01-08', 3, 1;		
+		EXEC spRegisterNewAbsence '2022-01-12', '2022-01-15', 1, 3;		
+		EXEC spRegisterNewAbsence '2024-05-01', '2024-05-21', 3, 1;		
+		EXEC spRegisterNewAbsence '2023-10-01', '2023-10-03', 3, 3;		
+		EXEC spRegisterNewAbsence '2023-07-27', '2023-07-28', 3, 3;
+		EXEC spRegisterNewAbsence '2024-02-01', '2024-02-03', 3, 3;		
+		EXEC spRegisterNewAbsence '2023-03-01', '2023-03-03', 3, 3;
+		EXEC spRegisterNewAbsence '2024-05-15', '2024-05-25', 4, 1;
+		EXEC spRegisterNewAbsence '2024-06-10', NULL, 5, 3;		
 
-INSERT INTO DepartmentEmployees (department_id, employee_id)
-VALUES(1,5);
+		/* Add a PTO request */
+		EXEC spRegisterNewPTORequest '2024-05-11', '2024-06-01', 2, 1;
+		EXEC spRegisterNewPTORequest '2024-08-01', '2024-08-21', 4, 2;
+		
+		COMMIT TRANSACTION transAddData;
+	END TRY
 
-INSERT INTO DepartmentEmployees (department_id, employee_id)
-VALUES(2,3);
-
-INSERT INTO DepartmentEmployees (department_id, employee_id)
-VALUES(3,1);
-
-INSERT INTO DepartmentEmployees (department_id, employee_id)
-VALUES(3,4);
-
-
-/* Add Managers */
-INSERT INTO Managers (department_id, employee_id)
-VALUES (1,1);
-
-INSERT INTO Managers (department_id, employee_id)
-VALUES (2,4);
-
-
-/* Add possible types of absences to table*/
-INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('PTO', 1);
-INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Scheduled annual leave', 1);
-INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Illness', 0);
-INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Unpaid leave', 1);
-INSERT INTO AbsenceTypes (absence_type, planned) VALUES ('Unplanned time off', 0);
-GO
-
-/* Add absence periods to table*/
-spRegisterNewAbsence '2024-01-07', '2024-01-08', 3, 1;
-GO
-spRegisterNewAbsence '2022-01-12', '2022-01-15', 1, 3;
-GO
-spRegisterNewAbsence '2024-05-01', '2024-05-21', 3, 1;
-GO
-spRegisterNewAbsence '2023-10-01', '2023-10-03', 3, 3;
-GO
-spRegisterNewAbsence '2023-07-27', '2023-07-28', 3, 3;
-GO
-spRegisterNewAbsence '2024-02-01', '2024-02-03', 3, 3;
-GO
-spRegisterNewAbsence '2023-03-01', '2023-03-03', 3, 3;
-GO
-spRegisterNewAbsence '2024-05-15', '2024-05-25', 4, 1;
-GO
-spRegisterNewAbsence '2024-06-10', NULL, 5, 3;
+	BEGIN CATCH
+		ROLLBACK TRANSACTION transAddData;
+	END CATCH
 GO
 
-/* Add a PTO request */
-spRegisterNewPTORequest '2024-05-11', '2024-06-01', 2, 1;
-GO
-spRegisterNewPTORequest '2024-08-01', '2024-08-21', 4, 2;
-GO
 
 
 /********************************************************
@@ -440,33 +403,27 @@ GO
 **********************************************************/
 
 /* List of all employees in department 1*/
-spGetAllEmployees 1
-GO
+EXEC spGetAllEmployees 1;
 
 /* Employees present in department 1 */
-spGetAbsentEmployeesByDepartment 1
-GO
+EXEC spGetAbsentEmployeesByDepartment 1;
 
 /* Number of absence periods for all employees */
-SELECT * FROM NumberAbsencesForAllEMployees
+SELECT * FROM NumberAbsencesForAllEmployees;
 GO
 
 /* All absence periods for employee 3 */
-spGetEmployeeAbsences 3
-GO
+EXEC spGetEmployeeAbsences 3;
 
 /* Employees with more than 2 absence periods within the past year in department 1*/
-spMoreThanTwoAbsencesForDepartment 2
-GO
+EXEC spMoreThanTwoAbsencesForDepartment 2;
 
 /* Approve PTO request */
-spApprovePTORequest 1
-GO
+EXEC spApprovePTORequest 1;
 
 /* View all unapproved PTO requests */
-SELECT * FROM GetUnapprovedPTORequests
+SELECT * FROM GetUnapprovedPTORequests;
 GO
-
 
 
 
